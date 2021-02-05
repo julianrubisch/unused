@@ -1,5 +1,6 @@
+use ignore::{WalkBuilder, WalkState};
 use std::path::PathBuf;
-use std::process::{Command, Output};
+use std::sync::{Arc, Mutex};
 
 pub struct CodebaseFiles {
     pub paths: Vec<PathBuf>,
@@ -7,35 +8,24 @@ pub struct CodebaseFiles {
 
 impl CodebaseFiles {
     pub fn all() -> CodebaseFiles {
-        let output = Command::new("git").arg("ls-files").output();
-        let mut paths = Self::process_ls_files(output);
-        paths.extend(Self::process_ls_files(
-            Command::new("git")
-                .arg("ls-files")
-                .arg("--others")
-                .arg("--exclude-standard")
-                .output(),
-        ));
+        let builder = WalkBuilder::new("./");
 
-        paths.sort();
-        paths.dedup();
-        CodebaseFiles {
-            paths: paths.into_iter().map(PathBuf::from).collect(),
-        }
-    }
+        let results = Arc::new(Mutex::new(vec![]));
 
-    fn process_ls_files<T>(output: Result<Output, T>) -> Vec<String> {
-        match output {
-            Ok(o) => {
-                if o.status.success() {
-                    std::str::from_utf8(&o.stdout).map_or(vec![], |v| {
-                        v.lines().map(|k| k.to_string()).collect::<Vec<String>>()
-                    })
-                } else {
-                    vec![]
+        builder.build_parallel().run(|| {
+            Box::new(|result| {
+                if let Ok(entry) = result {
+                    let mut results = results.lock().unwrap();
+                    results.push(entry.path().to_path_buf());
                 }
-            }
-            _ => vec![],
-        }
+
+                WalkState::Continue
+            })
+        });
+
+        let mut paths = results.lock().unwrap().to_vec();
+        paths.sort();
+
+        CodebaseFiles { paths }
     }
 }
